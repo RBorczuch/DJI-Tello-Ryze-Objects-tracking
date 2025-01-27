@@ -63,7 +63,8 @@ class VideoProcessor:
         # Set up the OpenCV window and mouse callback
         cv2.namedWindow("Tracking", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("Tracking", 960, 720)
-        cv2.setMouseCallback("Tracking", lambda event, x, y, flags, param: self.mouse_callback(event, x, y, flags, param))
+        cv2.setMouseCallback("Tracking", 
+                             lambda event, x, y, flags, param: self.mouse_callback(event, x, y, flags, param))
 
     def mouse_callback(self, event, x, y, flags, param):
         """
@@ -94,10 +95,11 @@ class VideoProcessor:
         elif event == cv2.EVENT_MOUSEWHEEL:
             # Adjust ROI size with mouse wheel
             delta_size = 10 if flags > 0 else -10
-            self.roi_size = max(self.min_roi_size, min(self.roi_size + delta_size, self.max_roi_size))
+            self.roi_size = max(self.min_roi_size, 
+                                min(self.roi_size + delta_size, self.max_roi_size))
 
-    def draw_text(self, img, text_lines, start_x, start_y, font_scale=0.5, color=(255, 255, 255),
-                  thickness=1, line_spacing=20):
+    def draw_text(self, img, text_lines, start_x, start_y, font_scale=0.5,
+                  color=(255, 255, 255), thickness=1, line_spacing=20):
         """
         Draws multi-line text on the image.
         """
@@ -109,10 +111,11 @@ class VideoProcessor:
     def draw_rectangle(self, img, bbox, color=(55, 55, 0), thickness=1):
         """
         Draws a rectangle based on bbox coordinates.
+        Returns the center of the rectangle (x_center, y_center).
         """
         x, y, w, h = [int(coord) for coord in bbox]
         cv2.rectangle(img, (x, y), (x + w, y + h), color, thickness)
-        return x + w // 2, y + h // 2  # Center coordinates
+        return x + w // 2, y + h // 2
 
     def draw_focused_area(self, img, x, y, size, color=(255, 0, 0), thickness=1):
         """
@@ -217,10 +220,12 @@ class VideoProcessor:
                 if frame_read.stopped:
                     print("[ERROR] Frame read stopped.")
                     break
+
                 new_frame = frame_read.frame
                 if new_frame is None:
                     print("[ERROR] Failed to read frame from Tello.")
                     continue
+
                 resized_frame = cv2.resize(new_frame, (RESIZED_WIDTH, RESIZED_HEIGHT))
                 rgb_frame = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB)
 
@@ -234,6 +239,7 @@ class VideoProcessor:
                 center_y = self.frame.shape[0] // 2
                 cv2.circle(self.frame, (center_x, center_y), 2, (0, 0, 255), -1)
 
+                # If tracking is active, update bounding box and data
                 if self.tracking_enabled and self.tracker is not None:
                     with self.frame_lock:
                         frame_copy = self.frame.copy()
@@ -241,8 +247,7 @@ class VideoProcessor:
                     self.frame = frame_copy
                 else:
                     # Display "Lost" status
-                    self.draw_text(self.frame, ["Status: Lost"],
-                                   10, 20, color=(200, 200, 200))
+                    self.draw_text(self.frame, ["Status: Lost"], 10, 20, color=(200, 200, 200))
 
                     # Update tracking data to reflect loss
                     with self.tracking_data.lock:
@@ -253,7 +258,22 @@ class VideoProcessor:
                         self.tracking_data.angle = 0.0
                         self.tracking_data.score = 0.0
 
+                # --- NEW CODE: Display the current control mode ---
+                with self.tracking_data.lock:
+                    mode_text = f"Mode: {self.tracking_data.control_mode}"
+                cv2.putText(
+                    self.frame,
+                    mode_text,
+                    (10, 50),  # Position slightly below the status text
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255, 255, 0),
+                    2
+                )
+                # --------------------------------------------------
+
                 self.draw_focused_area(self.frame, self.mouse_x, self.mouse_y, self.roi_size)
+
                 num_frames += 1
                 fps = num_frames / (time.time() - start_time)
                 self.draw_text(self.frame, [f"FPS: {fps:.2f}"],
