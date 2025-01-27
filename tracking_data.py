@@ -1,0 +1,12 @@
+# tracking_data.py
+import threading
+
+class TrackingData:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.status = "Lost"
+        self.dx = 0
+        self.dy = 0
+        self.distance = 0.0
+        self.angle = 0.0
+        self.score = 0.0

@@ -1,0 +1,6 @@
+keyboard
+opencv-python
+djitellopy
+numpy
+matplotlib
+opencv-contrib-python
