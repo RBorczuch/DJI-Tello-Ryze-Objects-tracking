@@ -258,19 +258,19 @@ class VideoProcessor:
                         self.tracking_data.angle = 0.0
                         self.tracking_data.score = 0.0
 
-                # --- NEW CODE: Display the current control mode ---
+                # Display the current control mode in the same style as other captions
                 with self.tracking_data.lock:
                     mode_text = f"Mode: {self.tracking_data.control_mode}"
-                cv2.putText(
+                self.draw_text(
                     self.frame,
-                    mode_text,
-                    (10, 50),  # Position slightly below the status text
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (255, 255, 0),
-                    2
+                    [mode_text],
+                    start_x=10,
+                    start_y=140,  # Shift down so it doesn't overlap other text
+                    font_scale=0.5,
+                    color=(255, 255, 255),  # Match the other text color
+                    thickness=1,
+                    line_spacing=20
                 )
-                # --------------------------------------------------
 
                 self.draw_focused_area(self.frame, self.mouse_x, self.mouse_y, self.roi_size)
 

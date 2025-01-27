@@ -7,7 +7,6 @@ from controller import handle_velocity_control
 from status_display import StatusDisplay
 from tracking_data import TrackingData  # Import the shared data class
 
-
 class TelloManager:
     def __init__(self):
         self.tello = Tello()
@@ -62,8 +61,13 @@ class TelloApplication:
         self.threads.append(video_thread)
         video_thread.start()
 
-        # Control thread
-        control_thread = threading.Thread(target=handle_velocity_control, args=(self.tello_manager.tello,))
+        # IMPORTANT FIX:
+        # Pass tracking_data to handle_velocity_control so that
+        # manual/autonomous mode switching works properly.
+        control_thread = threading.Thread(
+            target=handle_velocity_control,
+            args=(self.tello_manager.tello, self.tracking_data)
+        )
         control_thread.daemon = True
         self.threads.append(control_thread)
         control_thread.start()
