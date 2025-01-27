@@ -61,9 +61,7 @@ class TelloApplication:
         self.threads.append(video_thread)
         video_thread.start()
 
-        # IMPORTANT FIX:
-        # Pass tracking_data to handle_velocity_control so that
-        # manual/autonomous mode switching works properly.
+        # Controler thread
         control_thread = threading.Thread(
             target=handle_velocity_control,
             args=(self.tello_manager.tello, self.tracking_data)

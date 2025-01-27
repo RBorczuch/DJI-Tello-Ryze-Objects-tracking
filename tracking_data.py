@@ -10,5 +10,4 @@ class TrackingData:
         self.distance = 0.0
         self.angle = 0.0
         self.score = 0.0
-
         self.control_mode = "Manual"  # or "Autonomous"
