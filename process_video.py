@@ -1,7 +1,10 @@
+# process_video.py
+
 import cv2
 import numpy as np
 import math
 import time
+import queue
 from threading import Lock
 from tracking_data import TrackingData
 
@@ -9,9 +12,6 @@ RESIZED_WIDTH = 480
 RESIZED_HEIGHT = 360
 
 class VitTrack:
-    """
-    Simple wrapper for OpenCV's ViTTrack.
-    """
     def __init__(self, model_path, backend_id=0, target_id=0):
         self.model_path = model_path
         self.backend_id = backend_id
@@ -28,24 +28,28 @@ class VitTrack:
         self.model.init(image, roi)
 
     def infer(self, image):
-        is_located, bbox = self.model.update(image)
+        found, bbox = self.model.update(image)
         score = self.model.getTrackingScore()
-        return is_located, bbox, score
+        return found, bbox, score
+
 
 class VideoProcessor:
-    def __init__(self, tello, tracking_data, model_path='vittrack.onnx'):
-        self.tello = tello
+    """
+    Consumes frames, applies tracking, updates tracking_data,
+    and displays results in an OpenCV window.
+    """
+    def __init__(self, tracking_data, model_path='vittrack.onnx'):
         self.tracking_data = tracking_data
         self.model_path = model_path
 
-        self.frame = None
         self.frame_lock = Lock()
-
+        self.frame = None
         self.tracker = None
         self.tracking_enabled = False
         self.tracking_start_time = None
 
-        self.mouse_x, self.mouse_y = 0, 0
+        self.mouse_x = 0
+        self.mouse_y = 0
         self.new_bbox = None
         self.roi_size = 50
         self.min_roi_size = 25
@@ -53,12 +57,9 @@ class VideoProcessor:
 
         cv2.namedWindow("Tracking", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("Tracking", 960, 720)
-        cv2.setMouseCallback(
-            "Tracking",
-            lambda event, x, y, flags, param: self.mouse_callback(event, x, y, flags, param)
-        )
+        cv2.setMouseCallback("Tracking", self._on_mouse)
 
-    def mouse_callback(self, event, x, y, flags, param):
+    def _on_mouse(self, event, x, y, flags, param):
         self.mouse_x, self.mouse_y = x, y
 
         if event == cv2.EVENT_LBUTTONDOWN:
@@ -70,7 +71,7 @@ class VideoProcessor:
                 if self.frame is not None:
                     self.tracker.init(self.frame, self.new_bbox)
                 else:
-                    print("[ERROR] No frame available for tracker initialization.")
+                    print("[ERROR] No frame to init tracker.")
                     self.tracking_enabled = False
             self.tracking_start_time = time.time()
 
@@ -83,21 +84,18 @@ class VideoProcessor:
             delta_size = 10 if flags > 0 else -10
             if self.max_roi_size is None:
                 self.max_roi_size = 200
-            self.roi_size = max(
-                self.min_roi_size,
-                min(self.roi_size + delta_size, self.max_roi_size)
-            )
+            new_size = self.roi_size + delta_size
+            self.roi_size = max(self.min_roi_size, min(new_size, self.max_roi_size))
 
-    def draw_text(self, img, text_lines, start_x, start_y,
-                  font_scale=0.5, color=(255, 255, 255),
-                  thickness=1, line_spacing=20):
-        for i, line in enumerate(text_lines):
-            position = (start_x, start_y + i * line_spacing)
-            cv2.putText(img, line, position, cv2.FONT_HERSHEY_SIMPLEX,
+    def draw_text(self, img, lines, start_x, start_y, font_scale=0.5,
+                  color=(255, 255, 255), thickness=1, line_spacing=20):
+        for i, line in enumerate(lines):
+            pos = (start_x, start_y + i * line_spacing)
+            cv2.putText(img, line, pos, cv2.FONT_HERSHEY_SIMPLEX,
                         font_scale, color, thickness)
 
-    def draw_rectangle(self, img, bbox, color=(55, 55, 0), thickness=1):
-        x, y, w, h = [int(coord) for coord in bbox]
+    def draw_rectangle(self, img, bbox, color=(0, 255, 0), thickness=1):
+        x, y, w, h = map(int, bbox)
         cv2.rectangle(img, (x, y), (x + w, y + h), color, thickness)
         return x + w // 2, y + h // 2
 
@@ -109,54 +107,79 @@ class VideoProcessor:
         y2 = min(img.shape[0], y + half_size)
         cv2.rectangle(img, (x1, y1), (x2, y2), color, thickness)
 
-    def calculate_distance_and_angle(self, dx, dy):
-        distance = math.hypot(dx, dy)
-        angle_rad = math.atan2(dy, dx)
-        angle_deg = math.degrees(angle_rad)
-        if angle_deg < 0:
-            angle_deg += 360
-        return distance, angle_deg
+    def calculate_distance_angle(self, dx, dy):
+        dist = math.hypot(dx, dy)
+        angle = math.degrees(math.atan2(dy, dx))
+        if angle < 0:
+            angle += 360
+        return dist, angle
 
-    def update_tracking_info(self, frame, center_x, center_y):
-        stabilization_time = 0.5
-        is_located, bbox, score = self.tracker.infer(frame)
-        if is_located:
-            roi_center_x, roi_center_y = self.draw_rectangle(frame, bbox)
-            cv2.line(frame, (center_x, center_y),
-                     (roi_center_x, roi_center_y), (0, 255, 255), 1)
+    def process_frame(self, frame):
+        """
+        Processes a single frame: apply tracking if enabled, update tracking_data,
+        draw overlays, and show it in the 'Tracking' window.
+        """
+        with self.frame_lock:
+            self.frame = frame
 
-            dx = center_x - roi_center_x
-            dy = roi_center_y - center_y
-            distance, angle = self.calculate_distance_and_angle(dx, dy)
+        if self.max_roi_size is None:
+            self.max_roi_size = min(self.frame.shape[0], self.frame.shape[1])
 
-            _, _, _, h = bbox
+        center_x = self.frame.shape[1] // 2
+        center_y = self.frame.shape[0] // 2
+        cv2.circle(self.frame, (center_x, center_y), 2, (0, 0, 255), -1)
 
-            tracking_info = [
-                "Status: Tracking",
-                f"Score: {score:.2f}",
-                f"dx: {dx}px",
-                f"dy: {dy}px",
-                f"Distance: {distance:.2f}px",
-                f"Angle: {angle:.2f}°"
-            ]
-            self.draw_text(frame, tracking_info, 10, 20)
+        if self.tracking_enabled and self.tracker is not None:
+            frame_copy = self.frame.copy()
+            found, bbox, score = self.tracker.infer(frame_copy)
 
-            with self.tracking_data.lock:
-                self.tracking_data.status = "Tracking"
-                self.tracking_data.dx = dx
-                self.tracking_data.dy = dy
-                self.tracking_data.distance = distance
-                self.tracking_data.angle = angle
-                self.tracking_data.score = score
-                self.tracking_data.roi_height = h
+            if found:
+                cx, cy = self.draw_rectangle(frame_copy, bbox)
+                cv2.line(frame_copy, (center_x, center_y), (cx, cy), (0, 255, 255), 1)
+                dx = center_x - cx
+                dy = cy - center_y
+                dist, angle = self.calculate_distance_angle(dx, dy)
+                _, _, _, h = bbox
 
-            elapsed_time = time.time() - self.tracking_start_time
-            if elapsed_time > stabilization_time and score < 0.30:
+                info = [
+                    "Status: Tracking",
+                    f"Score: {score:.2f}",
+                    f"dx: {dx}px",
+                    f"dy: {dy}px",
+                    f"Distance: {dist:.2f}px",
+                    f"Angle: {angle:.2f}°",
+                ]
+                self.draw_text(frame_copy, info, 10, 20)
+
+                # Update shared tracking data
+                with self.tracking_data.lock:
+                    self.tracking_data.status = "Tracking"
+                    self.tracking_data.dx = dx
+                    self.tracking_data.dy = dy
+                    self.tracking_data.distance = dist
+                    self.tracking_data.angle = angle
+                    self.tracking_data.score = score
+                    self.tracking_data.roi_height = h
+
+                # Check if score is too low
+                if (time.time() - self.tracking_start_time > 0.5) and (score < 0.30):
+                    self.tracking_enabled = False
+                    self.tracker = None
+                    self.tracking_start_time = None
+                    self.draw_text(frame_copy, ["Status: Lost"], 10, 20, color=(255, 0, 255))
+                    with self.tracking_data.lock:
+                        self.tracking_data.status = "Lost"
+                        self.tracking_data.dx = 0
+                        self.tracking_data.dy = 0
+                        self.tracking_data.distance = 0.0
+                        self.tracking_data.angle = 0.0
+                        self.tracking_data.score = 0.0
+                        self.tracking_data.roi_height = 0
+            else:
+                self.draw_text(frame_copy, ["Status: Lost"], 10, 20, color=(255, 0, 255))
                 self.tracking_enabled = False
                 self.tracker = None
                 self.tracking_start_time = None
-                self.draw_text(frame, ["Status: Lost"], 10, 20, color=(255, 0, 255))
-
                 with self.tracking_data.lock:
                     self.tracking_data.status = "Lost"
                     self.tracking_data.dx = 0
@@ -165,12 +188,11 @@ class VideoProcessor:
                     self.tracking_data.angle = 0.0
                     self.tracking_data.score = 0.0
                     self.tracking_data.roi_height = 0
-        else:
-            self.draw_text(frame, ["Status: Lost"], 10, 20, color=(255, 0, 255))
-            self.tracking_enabled = False
-            self.tracker = None
-            self.tracking_start_time = None
 
+            self.frame = frame_copy
+        else:
+            # If not tracking
+            self.draw_text(self.frame, ["Status: Lost"], 10, 20, color=(200, 200, 200))
             with self.tracking_data.lock:
                 self.tracking_data.status = "Lost"
                 self.tracking_data.dx = 0
@@ -180,93 +202,89 @@ class VideoProcessor:
                 self.tracking_data.score = 0.0
                 self.tracking_data.roi_height = 0
 
-    def process_video(self):
-        print("Video processing started.")
-        start_time = time.time()
-        num_frames = 0
-
-        try:
-            while True:
-                frame_read = self.tello.get_frame_read()
-                if frame_read.stopped:
-                    print("[ERROR] Frame read stopped.")
-                    break
-
-                new_frame = frame_read.frame
-                if new_frame is None:
-                    print("[ERROR] Failed to read frame from Tello.")
-                    continue
-
-                resized_frame = cv2.resize(new_frame, (RESIZED_WIDTH, RESIZED_HEIGHT))
-                rgb_frame = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB)
-
-                with self.frame_lock:
-                    self.frame = rgb_frame.copy()
-
-                if self.max_roi_size is None:
-                    self.max_roi_size = min(self.frame.shape[1], self.frame.shape[0])
-
-                center_x = self.frame.shape[1] // 2
-                center_y = self.frame.shape[0] // 2
-                cv2.circle(self.frame, (center_x, center_y), 2, (0, 0, 255), -1)
-
-                if self.tracking_enabled and self.tracker is not None:
-                    with self.frame_lock:
-                        frame_copy = self.frame.copy()
-                    self.update_tracking_info(frame_copy, center_x, center_y)
-                    self.frame = frame_copy
+        # Show current control mode
+        with self.tracking_data.lock:
+            mode_text = f"Mode: {self.tracking_data.control_mode}"
+            if self.tracking_data.control_mode == "Autonomous":
+                if self.tracking_data.forward_enabled:
+                    auto_mode_text = "Targeting"
                 else:
-                    self.draw_text(self.frame, ["Status: Lost"], 10, 20, color=(200, 200, 200))
-                    with self.tracking_data.lock:
-                        self.tracking_data.status = "Lost"
-                        self.tracking_data.dx = 0
-                        self.tracking_data.dy = 0
-                        self.tracking_data.distance = 0.0
-                        self.tracking_data.angle = 0.0
-                        self.tracking_data.score = 0.0
-                        self.tracking_data.roi_height = 0
+                    auto_mode_text = "Tracking"
+            else:
+                auto_mode_text = ""
 
-                with self.tracking_data.lock:
-                    mode_text = f"Mode: {self.tracking_data.control_mode}"
-                    if self.tracking_data.control_mode == "Autonomous":
-                        if self.tracking_data.forward_enabled:
-                            auto_mode_text = "Targeting"
-                        else:
-                            auto_mode_text = "Tracking"
-                    else:
-                        auto_mode_text = ""
+        lines = [mode_text]
+        if auto_mode_text:
+            lines.append(auto_mode_text)
 
-                mode_lines = [mode_text]
-                if auto_mode_text:
-                    mode_lines.append(auto_mode_text)
+        self.draw_text(self.frame, lines, 10, 140)
 
-                self.draw_text(
-                    self.frame,
-                    mode_lines,
-                    start_x=10,
-                    start_y=140,
-                    font_scale=0.5,
-                    color=(255, 255, 255),
-                    line_spacing=20
-                )
+        # Draw the focus box for mouse
+        self.draw_focused_area(self.frame, self.mouse_x, self.mouse_y, self.roi_size)
+        return self.frame
 
-                self.draw_focused_area(self.frame, self.mouse_x, self.mouse_y, self.roi_size)
 
-                num_frames += 1
-                fps = num_frames / (time.time() - start_time)
-                self.draw_text(self.frame, [f"FPS: {fps:.2f}"],
-                               10, self.frame.shape[0] - 10, font_scale=0.5)
+def read_frames(tello, frame_queue, stop_event):
+    """
+    Producer: Continuously read frames from Tello, resize to standard,
+    and push them into frame_queue.
+    """
+    print("[INFO] Frame reader thread started.")
+    while not stop_event.is_set():
+        frame_read = tello.get_frame_read()
+        if frame_read.stopped:
+            print("[WARN] Tello frame read was stopped.")
+            break
 
-                cv2.imshow("Tracking", self.frame)
-                if cv2.waitKey(1) & 0xFF == 27:
-                    print("Video processing terminated.")
-                    break
+        raw_frame = frame_read.frame
+        if raw_frame is None:
+            continue
 
-        except Exception as e:
-            print(f"[ERROR] Video processing: {e}")
-        finally:
-            cv2.destroyAllWindows()
+        resized = cv2.resize(raw_frame, (RESIZED_WIDTH, RESIZED_HEIGHT))
 
-def process_tello_video(tello, tracking_data):
-    processor = VideoProcessor(tello, tracking_data)
-    processor.process_video()
+        if frame_queue.full():
+            try:
+                frame_queue.get_nowait()
+            except queue.Empty:
+                pass
+
+        frame_queue.put(resized)
+    print("[INFO] Frame reader thread exiting.")
+
+
+def track_frames(frame_queue, tracking_data, stop_event):
+    """
+    Consumer: Pop frames from frame_queue, run object tracking/drawing
+    with VideoProcessor, then show them in an OpenCV window.
+    """
+    processor = VideoProcessor(tracking_data)
+    print("[INFO] Frame tracker thread started.")
+    start_time = time.time()
+    frame_count = 0
+
+    try:
+        while not stop_event.is_set():
+            try:
+                frame = frame_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            processed = processor.process_frame(rgb_frame)
+
+            frame_count += 1
+            fps = frame_count / (time.time() - start_time)
+            processor.draw_text(processor.frame,
+                                [f"FPS: {fps:.2f}"],
+                                10,
+                                processor.frame.shape[0] - 10)
+
+            cv2.imshow("Tracking", processor.frame)
+            if cv2.waitKey(1) & 0xFF == 27:
+                print("[INFO] ESC pressed, stopping tracker.")
+                break
+    except Exception as e:
+        print(f"[ERROR] track_frames: {e}")
+    finally:
+        print("[INFO] Stopping track_frames, cleaning up.")
+        cv2.destroyAllWindows()
