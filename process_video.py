@@ -5,16 +5,12 @@ import numpy as np
 import math
 import time
 from threading import Lock
-from tracking_data import TrackingData  # Ensure this module is available
+from tracking_data import TrackingData
 
-# Constants for easy resolution changes
 RESIZED_WIDTH = 480
 RESIZED_HEIGHT = 360
 
 class VitTrack:
-    """
-    A class encapsulating the ViTTrack tracker using OpenCV's implementation.
-    """
     def __init__(self, model_path, backend_id=0, target_id=0):
         self.model_path = model_path
         self.backend_id = backend_id
@@ -36,35 +32,28 @@ class VitTrack:
         return is_located, bbox, score
 
 class VideoProcessor:
-    """
-    A class to handle video processing and tracking using OpenCV.
-    """
     def __init__(self, tello, tracking_data, model_path='vittrack.onnx'):
         self.tello = tello
         self.tracking_data = tracking_data
         self.model_path = model_path
 
-        # Variables for frame handling
         self.frame = None
         self.frame_lock = Lock()
 
-        # Tracker variables
         self.tracker = None
         self.tracking_enabled = False
         self.tracking_start_time = None
 
-        # Mouse interaction variables
         self.mouse_x, self.mouse_y = 0, 0
         self.new_bbox = None
         self.roi_size = 50
         self.min_roi_size = 25
         self.max_roi_size = None
 
-        # Set up the OpenCV window
         cv2.namedWindow("Tracking", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("Tracking", 960, 720)
         cv2.setMouseCallback(
-            "Tracking", 
+            "Tracking",
             lambda event, x, y, flags, param: self.mouse_callback(event, x, y, flags, param)
         )
 
@@ -91,13 +80,16 @@ class VideoProcessor:
 
         elif event == cv2.EVENT_MOUSEWHEEL:
             delta_size = 10 if flags > 0 else -10
+            if self.max_roi_size is None:
+                self.max_roi_size = 200  # fallback if not set
             self.roi_size = max(
-                self.min_roi_size, 
+                self.min_roi_size,
                 min(self.roi_size + delta_size, self.max_roi_size)
             )
 
-    def draw_text(self, img, text_lines, start_x, start_y, font_scale=0.5,
-                  color=(255, 255, 255), thickness=1, line_spacing=20):
+    def draw_text(self, img, text_lines, start_x, start_y,
+                  font_scale=0.5, color=(255, 255, 255),
+                  thickness=1, line_spacing=20):
         for i, line in enumerate(text_lines):
             position = (start_x, start_y + i * line_spacing)
             cv2.putText(img, line, position, cv2.FONT_HERSHEY_SIMPLEX,
@@ -125,38 +117,32 @@ class VideoProcessor:
         return distance, angle_deg
 
     def update_tracking_info(self, frame, center_x, center_y):
-        """
-        Updates tracking information and displays it on the image.
-        """
-        stabilization_time = 0.5  # Seconds
+        stabilization_time = 0.5
         is_located, bbox, score = self.tracker.infer(frame)
         if is_located:
             roi_center_x, roi_center_y = self.draw_rectangle(frame, bbox)
-            # Draw line between frame center and ROI center
             cv2.line(frame, (center_x, center_y),
                      (roi_center_x, roi_center_y), (0, 255, 255), 1)
 
             dx = center_x - roi_center_x
-            dy = roi_center_y - center_y  # Inverted y-axis
+            dy = roi_center_y - center_y
             distance, angle = self.calculate_distance_and_angle(dx, dy)
 
-            # --- NEW CODE ---
-            # Extract height from bbox for front/back PID
             # bbox = (x, y, w, h)
-            _, _, _, h = bbox
+            (_, _, _, h) = bbox
 
+            # Remove the ROI-height display from text
             tracking_info = [
                 "Status: Tracking",
                 f"Score: {score:.2f}",
                 f"dx: {dx}px",
                 f"dy: {dy}px",
                 f"Distance: {distance:.2f}px",
-                f"Angle: {angle:.2f}st",
-                f"h (ROI): {h}px",  # Just for debugging
+                f"Angle: {angle:.2f}°"
+                # No more "ROI height" text
             ]
             self.draw_text(frame, tracking_info, 10, 20)
 
-            # Update shared tracking data
             with self.tracking_data.lock:
                 self.tracking_data.status = "Tracking"
                 self.tracking_data.dx = dx
@@ -164,9 +150,8 @@ class VideoProcessor:
                 self.tracking_data.distance = distance
                 self.tracking_data.angle = angle
                 self.tracking_data.score = score
-                self.tracking_data.roi_height = h  # <--- store ROI height
+                self.tracking_data.roi_height = h
 
-            # Check for low score after stabilization time
             elapsed_time = time.time() - self.tracking_start_time
             if elapsed_time > stabilization_time and score < 0.30:
                 self.tracking_enabled = False
@@ -174,7 +159,6 @@ class VideoProcessor:
                 self.tracking_start_time = None
                 self.draw_text(frame, ["Status: Lost"], 10, 20, color=(255, 0, 255))
 
-                # Update tracking data to reflect loss
                 with self.tracking_data.lock:
                     self.tracking_data.status = "Lost"
                     self.tracking_data.dx = 0
@@ -189,7 +173,6 @@ class VideoProcessor:
             self.tracker = None
             self.tracking_start_time = None
 
-            # Update tracking data to reflect loss
             with self.tracking_data.lock:
                 self.tracking_data.status = "Lost"
                 self.tracking_data.dx = 0
@@ -245,28 +228,39 @@ class VideoProcessor:
                         self.tracking_data.score = 0.0
                         self.tracking_data.roi_height = 0
 
+                # Show current control mode
                 with self.tracking_data.lock:
                     mode_text = f"Mode: {self.tracking_data.control_mode}"
-                self.draw_text(
-                    self.frame,
-                    [mode_text],
-                    start_x=10,
-                    start_y=140,
-                    font_scale=0.5,
-                    color=(255, 255, 255),
-                    thickness=1,
-                    line_spacing=20
-                )
+                    
+                    # If Autonomous, also show whether forward/back targeting is on
+                    if self.tracking_data.control_mode == "Autonomous":
+                        if self.tracking_data.forward_enabled:
+                            # "Targeting" means we are doing forward/back as well
+                            auto_mode_text = "Targeting"
+                        else:
+                            # If forward_enabled = False, we are only doing yaw/vertical
+                            auto_mode_text = "Tracking"
+                    else:
+                        auto_mode_text = ""
 
+                # We can draw the mode and the extra line together
+                mode_lines = [mode_text]
+                if auto_mode_text:
+                    mode_lines.append(auto_mode_text)
+
+                # Place these below the main tracking info (start_y=140 is safe)
+                self.draw_text(self.frame, mode_lines, start_x=10, start_y=140,
+                               font_scale=0.5, color=(255, 255, 255), line_spacing=20)
+
+                # Draw the small focus box around the mouse
                 self.draw_focused_area(self.frame, self.mouse_x, self.mouse_y, self.roi_size)
 
                 num_frames += 1
                 fps = num_frames / (time.time() - start_time)
                 self.draw_text(self.frame, [f"FPS: {fps:.2f}"],
-                               10, self.frame.shape[0] - 10)
+                               10, self.frame.shape[0] - 10, font_scale=0.5)
 
                 cv2.imshow("Tracking", self.frame)
-
                 if cv2.waitKey(1) & 0xFF == 27:
                     print("Video processing terminated.")
                     break

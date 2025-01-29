@@ -19,38 +19,26 @@ class DroneController:
         self.max_velocity = max_velocity
         self.last_command = (0, 0, 0, 0)
 
-        # PID controllers for autonomous mode
-        self.yaw_pid = PIDController(
-            kp=0.4, ki=0.0, kd=0.0,
-            setpoint=0.0,
-            output_limits=(-100, 100)
-        )
-        self.vertical_pid = PIDController(
-            kp=0.4, ki=0.0, kd=0.0,
-            setpoint=0.0,
-            output_limits=(-100, 100)
-        )
+        # PID controllers for yaw & vertical
+        self.yaw_pid = PIDController(kp=0.4, ki=0.0, kd=0.0,
+                                     setpoint=0.0, output_limits=(-100, 100))
+        self.vertical_pid = PIDController(kp=0.4, ki=0.0, kd=0.0,
+                                          setpoint=0.0, output_limits=(-100, 100))
 
-        # --- NEW CODE ---
-        # PID for forward/back based on ROI height
-        # Desired bounding box height = 1/3 of 360 = 120 px
-        self.forward_pid = PIDController(
-            kp=0.4, ki=0.0, kd=0.0,
-            setpoint=120.0,  # target ROI height
-            output_limits=(-100, 100)
-        )
+        # PID for forward/back (target is 1/3 of 360 -> 120 px)
+        self.forward_pid = PIDController(kp=0.4, ki=0.0, kd=0.0,
+                                         setpoint=120.0,
+                                         output_limits=(-100, 100))
 
-        self.error_threshold = 20  # Allowed error in px (for dx, dy)
-
-        # Toggle for forward/back control in autonomous mode
-        self.autonomous_forward_enabled = False  # user toggles with 's'
+        self.error_threshold = 20  # Allowed error in px for dx/dy
+        self.autonomous_forward_enabled = False  # local toggle for forward/back
 
     def control_drone(self):
         try:
             self._display_controls()
             while True:
                 self._handle_mode_switch()
-                self._handle_forward_switch()  # <--- check if user pressed 's'
+                self._handle_forward_switch()  # <--- checks 's' key in autonomous mode
 
                 if self.tracking_data.control_mode == "Manual":
                     command = self._get_velocity_command()
@@ -75,7 +63,7 @@ class DroneController:
         print("  t: start | l: lądowanie")
         print("  <, >: zmniejszenie/zwiększenie prędkości (domyślnie 20 cm/s)")
         print("  SPACJA: przełączanie między trybem Manual i Autonomous")
-        print("  s (tylko w Autonomous): włącz/wyłącz śledzenie przód/tył po rozmiarze ROI")
+        print("  s (tylko w Autonomous): włącz/wyłącz front/back targeting")
         print("Naciśnij ESC, aby zakończyć sterowanie.")
 
     def _adjust_velocity(self):
@@ -93,24 +81,24 @@ class DroneController:
         y_velocity = x_velocity = z_velocity = yaw_velocity = 0
 
         # Manual controls
-        if keyboard.is_pressed('w'):  # Forward
+        if keyboard.is_pressed('w'):
             x_velocity = self.velocity
-        elif keyboard.is_pressed('s'):  # Backward
+        elif keyboard.is_pressed('s'):
             x_velocity = -self.velocity
 
-        if keyboard.is_pressed('a'):  # Left
+        if keyboard.is_pressed('a'):
             y_velocity = -self.velocity
-        elif keyboard.is_pressed('d'):  # Right
+        elif keyboard.is_pressed('d'):
             y_velocity = self.velocity
 
-        if keyboard.is_pressed('r'):  # Up
+        if keyboard.is_pressed('r'):
             z_velocity = self.velocity
-        elif keyboard.is_pressed('f'):  # Down
+        elif keyboard.is_pressed('f'):
             z_velocity = -self.velocity
 
-        if keyboard.is_pressed('q'):  # Rotate left
+        if keyboard.is_pressed('q'):
             yaw_velocity = -self.velocity
-        elif keyboard.is_pressed('e'):  # Rotate right
+        elif keyboard.is_pressed('e'):
             yaw_velocity = self.velocity
 
         return (y_velocity, x_velocity, z_velocity, yaw_velocity)
@@ -145,23 +133,21 @@ class DroneController:
                     self.tracking_data.control_mode = "Manual"
                     print("[INFO] Switched to MANUAL mode.")
 
-    # --- NEW CODE ---
     def _handle_forward_switch(self):
-        """
-        Toggles autonomous forward/back tracking if in Autonomous mode
-        when the user presses 's'.
-        """
-        if self.tracking_data.control_mode == "Autonomous":
-            if keyboard.is_pressed('s'):
-                time.sleep(0.3)  # prevent double-trigger
-                self.autonomous_forward_enabled = not self.autonomous_forward_enabled
-                state = "ENABLED" if self.autonomous_forward_enabled else "DISABLED"
-                print(f"[INFO] Front/Back tracking {state} in Autonomous mode.")
+        """Toggles forward/back targeting if in Autonomous mode when 's' is pressed."""
+        with self.tracking_data.lock:
+            if self.tracking_data.control_mode == "Autonomous":
+                if keyboard.is_pressed('s'):
+                    time.sleep(0.3)  # prevent double-trigger
+                    self.autonomous_forward_enabled = not self.autonomous_forward_enabled
+                    self.tracking_data.forward_enabled = self.autonomous_forward_enabled
+                    state = "ENABLED" if self.autonomous_forward_enabled else "DISABLED"
+                    print(f"[INFO] Front/back targeting {state}.")
 
     def _autonomous_control(self):
         with self.tracking_data.lock:
             if self.tracking_data.status == "Lost":
-                # Object is lost; revert to Manual automatically
+                # Object is lost; revert to Manual
                 self.tracking_data.control_mode = "Manual"
                 print("[INFO] Target lost. Reverting to MANUAL mode.")
                 return
@@ -169,35 +155,33 @@ class DroneController:
             dx = self.tracking_data.dx
             dy = self.tracking_data.dy
             roi_height = self.tracking_data.roi_height
+            forward_on = self.tracking_data.forward_enabled
 
-        # Yaw control
+        # Yaw control (rotate to center object horizontally)
         if abs(dx) < self.error_threshold:
             yaw_output = 0
         else:
             yaw_output = self.yaw_pid.compute(dx)
 
-        # Vertical control
+        # Vertical control (move up/down to center object vertically)
         if abs(dy) < self.error_threshold:
             vertical_output = 0
         else:
             vertical_output = self.vertical_pid.compute(dy)
 
-        yaw_velocity = int(yaw_output)
-        z_velocity = int(vertical_output)
-
-        # --- NEW CODE ---
-        # Forward/back control based on ROI height if enabled
-        if self.autonomous_forward_enabled:
+        # If forward/back targeting is enabled in autonomous mode
+        if forward_on:
             forward_output = self.forward_pid.compute(roi_height)
-            x_velocity = int(forward_output)  # Positive => forward, Negative => backward
+            x_velocity = int(forward_output)
         else:
             x_velocity = 0
 
-        # We don't move left/right in this example
-        y_velocity = 0
+        yaw_velocity = int(yaw_output)
+        z_velocity = int(vertical_output)
+        y_velocity = 0  # not moving left/right here
 
-        # Send the command
         self._send_velocity_command((y_velocity, x_velocity, z_velocity, yaw_velocity))
+
 
 def handle_velocity_control(tello, tracking_data):
     controller = DroneController(tello, tracking_data)

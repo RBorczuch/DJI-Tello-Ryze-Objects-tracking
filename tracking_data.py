@@ -12,6 +12,8 @@ class TrackingData:
         self.score = 0.0
         self.control_mode = "Manual"  # or "Autonomous"
 
-        # --- NEW CODE ---
-        # Store the tracked bounding box height so the controller can decide forward/back motion
+        # Store bounding-box height (for front/back PID)
         self.roi_height = 0
+
+        # NEW: track whether forward/back targeting is enabled in autonomous mode
+        self.forward_enabled = False
