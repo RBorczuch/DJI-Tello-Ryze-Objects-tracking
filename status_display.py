@@ -18,7 +18,7 @@ class StatusDisplay:
         self.state_data = {}
         self.root = tk.Tk()
         self.root.title("Drone Status")
-        self.root.geometry("2000x900")  # Adjusted height for additional plots
+        self.root.geometry("2000x900")  
 
         # Configure root window to adjust with resizing
         self.root.grid_columnconfigure(0, weight=1)
