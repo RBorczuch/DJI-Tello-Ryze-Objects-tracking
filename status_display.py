@@ -75,11 +75,15 @@ class StatusDisplay:
 
         self.fig_3d = plt.figure(figsize=(8, 6))
         self.ax_3d = self.fig_3d.add_subplot(111, projection="3d")
-        self.ax_3d.set_title("Odometry")
+
+        self.ax_3d.set_title("Odometry (X=Forward, Y=Left, Z=Down)")
         self.ax_3d.set_xlabel("X (cm)")
         self.ax_3d.set_ylabel("Y (cm)")
         self.ax_3d.set_zlabel("Z (cm)")
-        self.ax_3d.invert_zaxis()
+
+        # IMPORTANT: This inverts the Z-axis so that Tello's "positive = down"
+        # is displayed visually as "positive = up" on the chart.
+        self.ax_3d.invert_zaxis()  # <-- ADDED BACK
 
         self.canvas_3d = FigureCanvasTkAgg(self.fig_3d, master=right_3d_frame)
         self.canvas_3d.get_tk_widget().grid(row=0, column=0, sticky="nsew")
@@ -234,6 +238,15 @@ class StatusDisplay:
 
         self.root.after(100, self.update_labels)
 
+    def _initialize_buffers(self):
+        return {
+            "local_time": [],
+            "vgx": [], "vgy": [], "vgz": [],
+            "pitch": [], "roll": [], "yaw": [], "h": [],
+            "agx": [], "agy": [], "agz": [],
+            "dx": [], "dy": [], "distance": [], "angle": [],
+        }
+
     def _buffer_data(self, state):
         current_time = time.time() - self.start_time
         self.buffer["local_time"].append(current_time)
@@ -357,11 +370,20 @@ class StatusDisplay:
 
     def _update_3d_plot(self):
         self.ax_3d.clear()
+
+        # Plot the path
         self.ax_3d.plot(
-            self.position_data["x"], self.position_data["y"], self.position_data["z"], label="Trajectory"
+            self.position_data["x"],
+            self.position_data["y"],
+            self.position_data["z"],
+            label="Trajectory"
         )
 
-        x, y, z = self.position_data["x"][-1], self.position_data["y"][-1], self.position_data["z"][-1]
+        x, y, z = (
+            self.position_data["x"][-1],
+            self.position_data["y"][-1],
+            self.position_data["z"][-1]
+        )
 
         if len(self.plot_data["pitch"]) > 0 and len(self.plot_data["roll"]) > 0 and len(self.plot_data["yaw"]) > 0:
             pitch, roll, yaw = (
@@ -390,11 +412,11 @@ class StatusDisplay:
                 color="b", length=1, normalize=True, label="Z-Axis"
             )
 
-        self.ax_3d.set_title("Odometry")
+        self.ax_3d.set_title("Odometry (X=Forward, Y=Left, Z=Down)")
         self.ax_3d.set_xlabel("X (cm)")
         self.ax_3d.set_ylabel("Y (cm)")
         self.ax_3d.set_zlabel("Z (cm)")
-        self.ax_3d.invert_zaxis()
+        self.ax_3d.invert_zaxis()  # Key: Ensures "drone up" is "chart up" if Tello's vgz is reversed
         self.ax_3d.legend()
         self.canvas_3d.draw()
 
@@ -421,5 +443,10 @@ class StatusDisplay:
         Thread(target=self.update_state, daemon=True).start()
         Thread(target=self.update_wifi, daemon=True).start()
         self.update_labels()
-        animation.FuncAnimation(self.fig, self.update_plots, interval=200, cache_frame_data=False)
+
+        # Keep a reference to avoid garbage collection
+        self.ani = animation.FuncAnimation(
+            self.fig, self.update_plots, interval=200, cache_frame_data=False
+        )
+
         self.root.mainloop()
