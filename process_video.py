@@ -1,5 +1,3 @@
-# process_video.py
-
 import cv2
 import numpy as np
 import math
@@ -11,6 +9,9 @@ RESIZED_WIDTH = 480
 RESIZED_HEIGHT = 360
 
 class VitTrack:
+    """
+    Simple wrapper for OpenCV's ViTTrack.
+    """
     def __init__(self, model_path, backend_id=0, target_id=0):
         self.model_path = model_path
         self.backend_id = backend_id
@@ -69,7 +70,7 @@ class VideoProcessor:
                 if self.frame is not None:
                     self.tracker.init(self.frame, self.new_bbox)
                 else:
-                    print("[ERROR] Frame is None. Cannot initialize tracker.")
+                    print("[ERROR] No frame available for tracker initialization.")
                     self.tracking_enabled = False
             self.tracking_start_time = time.time()
 
@@ -81,7 +82,7 @@ class VideoProcessor:
         elif event == cv2.EVENT_MOUSEWHEEL:
             delta_size = 10 if flags > 0 else -10
             if self.max_roi_size is None:
-                self.max_roi_size = 200  # fallback if not set
+                self.max_roi_size = 200
             self.roi_size = max(
                 self.min_roi_size,
                 min(self.roi_size + delta_size, self.max_roi_size)
@@ -128,10 +129,8 @@ class VideoProcessor:
             dy = roi_center_y - center_y
             distance, angle = self.calculate_distance_and_angle(dx, dy)
 
-            # bbox = (x, y, w, h)
-            (_, _, _, h) = bbox
+            _, _, _, h = bbox
 
-            # Remove the ROI-height display from text
             tracking_info = [
                 "Status: Tracking",
                 f"Score: {score:.2f}",
@@ -139,7 +138,6 @@ class VideoProcessor:
                 f"dy: {dy}px",
                 f"Distance: {distance:.2f}px",
                 f"Angle: {angle:.2f}°"
-                # No more "ROI height" text
             ]
             self.draw_text(frame, tracking_info, 10, 20)
 
@@ -228,31 +226,30 @@ class VideoProcessor:
                         self.tracking_data.score = 0.0
                         self.tracking_data.roi_height = 0
 
-                # Show current control mode
                 with self.tracking_data.lock:
                     mode_text = f"Mode: {self.tracking_data.control_mode}"
-                    
-                    # If Autonomous, also show whether forward/back targeting is on
                     if self.tracking_data.control_mode == "Autonomous":
                         if self.tracking_data.forward_enabled:
-                            # "Targeting" means we are doing forward/back as well
                             auto_mode_text = "Targeting"
                         else:
-                            # If forward_enabled = False, we are only doing yaw/vertical
                             auto_mode_text = "Tracking"
                     else:
                         auto_mode_text = ""
 
-                # We can draw the mode and the extra line together
                 mode_lines = [mode_text]
                 if auto_mode_text:
                     mode_lines.append(auto_mode_text)
 
-                # Place these below the main tracking info (start_y=140 is safe)
-                self.draw_text(self.frame, mode_lines, start_x=10, start_y=140,
-                               font_scale=0.5, color=(255, 255, 255), line_spacing=20)
+                self.draw_text(
+                    self.frame,
+                    mode_lines,
+                    start_x=10,
+                    start_y=140,
+                    font_scale=0.5,
+                    color=(255, 255, 255),
+                    line_spacing=20
+                )
 
-                # Draw the small focus box around the mouse
                 self.draw_focused_area(self.frame, self.mouse_x, self.mouse_y, self.roi_size)
 
                 num_frames += 1
@@ -266,10 +263,10 @@ class VideoProcessor:
                     break
 
         except Exception as e:
-            print(f"Error in video processing: {e}")
+            print(f"[ERROR] Video processing: {e}")
         finally:
             cv2.destroyAllWindows()
 
 def process_tello_video(tello, tracking_data):
-    video_processor = VideoProcessor(tello, tracking_data)
-    video_processor.process_video()
+    processor = VideoProcessor(tello, tracking_data)
+    processor.process_video()
