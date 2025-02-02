@@ -1,5 +1,3 @@
-# process_video.py
-
 import cv2
 import numpy as np
 import math
@@ -50,9 +48,10 @@ COLOR_BLUE = (255, 0, 0)
 
 FPS_TEXT_OFFSET_Y = -10
 
+
 class VitTrack:
     """
-    TrackerVit wrapper.
+    A wrapper for the OpenCV TrackerVit.
     """
     def __init__(self, model_path, backend_id=0, target_id=0):
         self.model_path = model_path
@@ -116,13 +115,18 @@ class VideoProcessor:
                     FONT_SCALE, COLOR_WHITE, FONT_THICKNESS)
 
     def _on_mouse(self, event, x, y, flags, param):
+        """
+        Mouse callback for selecting and resetting ROIs or adjusting ROI size via mouse wheel.
+        """
         self.mouse_x, self.mouse_y = x, y
 
         if event == cv2.EVENT_LBUTTONDOWN:
+            # Left-click: initialize tracking at the selected ROI
             x1, y1 = x - self.roi_size // 2, y - self.roi_size // 2
             self.new_bbox = (x1, y1, self.roi_size, self.roi_size)
             self.tracking_enabled = True
             self.tracker = VitTrack(self.model_path)
+
             with self.frame_lock:
                 if self.frame is not None:
                     self.tracker.init(self.frame, self.new_bbox)
@@ -137,17 +141,20 @@ class VideoProcessor:
                 else:
                     print("[ERROR] No frame available for initialization.")
                     self.tracking_enabled = False
+
             self.tracking_start_time = time.time()
             self.frame_number = 0
             self.reid_fail_count = 0
 
         elif event == cv2.EVENT_RBUTTONDOWN:
+            # Right-click: disable tracking
             self.tracking_enabled = False
             self.tracker = None
             self.tracking_start_time = None
             self.sift_template = None
 
         elif event == cv2.EVENT_MOUSEWHEEL:
+            # Mouse wheel: adjust ROI size
             delta_size = 10 if flags > 0 else -10
             if self.max_roi_size is None:
                 self.max_roi_size = DEFAULT_MAX_ROI_SIZE
@@ -157,17 +164,27 @@ class VideoProcessor:
     def draw_text(self, img, lines, start_x, start_y,
                   font_scale=FONT_SCALE, color=COLOR_WHITE,
                   thickness=FONT_THICKNESS, line_spacing=LINE_SPACING):
+        """
+        Draws multiple lines of text on the image at a given starting coordinate.
+        """
         for i, line in enumerate(lines):
             pos = (start_x, start_y + i * line_spacing)
             cv2.putText(img, line, pos, cv2.FONT_HERSHEY_SIMPLEX,
                         font_scale, color, thickness)
 
     def draw_rectangle(self, img, bbox, color=COLOR_GREEN, thickness=1):
+        """
+        Draws a rectangle on the image based on the bounding box (x, y, w, h).
+        Returns the center coordinates of the rectangle.
+        """
         x, y, w, h = map(int, bbox)
         cv2.rectangle(img, (x, y), (x + w, y + h), color, thickness)
         return x + w // 2, y + h // 2
 
     def draw_focused_area(self, img, x, y, size, color=COLOR_BLUE, thickness=1):
+        """
+        Draws a 'focus box' around the mouse cursor to show the intended ROI size.
+        """
         half_size = size // 2
         x1 = max(0, x - half_size)
         y1 = max(0, y - half_size)
@@ -176,6 +193,10 @@ class VideoProcessor:
         cv2.rectangle(img, (x1, y1), (x2, y2), color, thickness)
 
     def calculate_distance_angle(self, dx, dy):
+        """
+        Calculates the Euclidean distance and angle (in degrees) relative to the center.
+        dx, dy are offsets along the x and y axes, respectively.
+        """
         dist = math.hypot(dx, dy)
         angle = math.degrees(math.atan2(dy, dx))
         if angle < 0:
@@ -183,10 +204,15 @@ class VideoProcessor:
         return dist, angle
 
     def _run_reid(self, frame):
+        """
+        Threaded function to run SIFT-based re-identification.
+        If it succeeds, we re-initialize the tracker with the new bounding box.
+        """
         sift = cv2.SIFT_create()
         gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         kp_frame, des_frame = sift.detectAndCompute(gray_frame, None)
         success = False
+
         if des_frame is not None and self.sift_template and self.sift_template[1] is not None:
             bf = cv2.BFMatcher()
             matches = bf.knnMatch(self.sift_template[1], des_frame, k=2)
@@ -206,13 +232,14 @@ class VideoProcessor:
                         self.tracking_enabled = True
                         self.tracking_start_time = time.time()
                     success = True
+
         self.reid_thread_running = False
         if success:
             self.reid_fail_count = 0
 
     def process_frame(self, frame):
         """
-        Przetwarza otrzymaną klatkę BGR i zwraca też BGR z nałożonymi overlayami.
+        Processes the received BGR frame and returns a BGR frame with overlays.
         """
         with self.frame_lock:
             self.frame = frame
@@ -223,7 +250,8 @@ class VideoProcessor:
 
         center_x = img_w // 2
         center_y = img_h // 2
-        # Narysuj kropkę w centrum kadru
+
+        # Draw a small dot in the frame center
         cv2.circle(self.frame, (center_x, center_y), 2, (0, 0, 255), -1)
 
         frame_copy = self.frame.copy()
@@ -233,11 +261,15 @@ class VideoProcessor:
             found, bbox, score = self.tracker.infer(frame_copy)
             if found:
                 x, y, w, h = map(int, bbox)
-                # Jeśli box zbyt duży -> re-ID
+                # If the bounding box is too large, switch to re-identification
                 if w >= img_w - IMG_MARGIN or h >= img_h - IMG_MARGIN:
                     self._overlay_status(self.STATUS_REID, STATUS_TEXT_POS)
                     self.tracking_enabled = False
                     self.tracker = None
+                    # [MODIFIED] Force manual control during re-identification
+                    with self.tracking_data.lock:
+                        self.tracking_data.status = self.STATUS_REID
+                        self.tracking_data.control_mode = "Manual"
                 else:
                     cx, cy = self.draw_rectangle(frame_copy, bbox)
                     cv2.line(frame_copy, (center_x, center_y), (cx, cy), COLOR_YELLOW, 1)
@@ -265,7 +297,7 @@ class VideoProcessor:
                         self.tracking_data.score = score
                         self.tracking_data.roi_height = h
 
-                    # Zbyt niskie score -> utracono tracking
+                    # If score is too low after minimum tracking duration -> tracking lost
                     if (time.time() - self.tracking_start_time > MIN_TRACK_DURATION) and (score < MIN_TRACK_SCORE):
                         self.tracking_enabled = False
                         self.tracker = None
@@ -273,22 +305,24 @@ class VideoProcessor:
                         self._overlay_status(self.STATUS_LOST, STATUS_TEXT_POS)
                         with self.tracking_data.lock:
                             self.tracking_data.status = self.STATUS_LOST
+                            self.tracking_data.control_mode = "Manual"
             else:
-                # Nie znaleziono
+                # Could not find the target
                 self._overlay_status(self.STATUS_LOST, STATUS_TEXT_POS)
                 self.tracking_enabled = False
                 self.tracker = None
                 self.tracking_start_time = None
                 with self.tracking_data.lock:
                     self.tracking_data.status = self.STATUS_LOST
+                    self.tracking_data.control_mode = "Manual"
 
             self.frame = frame_copy
 
-            # Update SIFT template jeśli wysoki score
+            # Update the SIFT template if score is sufficiently high
             if found and score > SIFT_UPDATE_SCORE_THRESHOLD:
                 x, y, w, h = map(int, bbox)
                 if w > 0 and h > 0:
-                    roi = frame_copy[y:y+h, x:x+w]
+                    roi = frame_copy[y:y + h, x:x + w]
                     if roi.size != 0:
                         gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
                         sift = cv2.SIFT_create()
@@ -302,32 +336,45 @@ class VideoProcessor:
                 self.reid_thread_running = True
                 threading.Thread(target=self._run_reid, args=(self.frame.copy(),)).start()
                 self.reid_fail_count += self.reid_interval
+
+                # [MODIFIED] Force manual control during ReID
+                with self.tracking_data.lock:
+                    self.tracking_data.status = self.STATUS_REID
+                    self.tracking_data.control_mode = "Manual"
+
                 if self.reid_fail_count >= REID_FAILURE_LIMIT:
                     self._overlay_status(self.STATUS_LOST, REID_TEXT_POS)
                     with self.tracking_data.lock:
                         self.tracking_data.status = self.STATUS_LOST
+                        self.tracking_data.control_mode = "Manual"
                     self.sift_template = None
                     self.tracking_enabled = False
                 else:
                     self._overlay_status(self.STATUS_REID, REID_TEXT_POS)
             else:
+                # Even if we're not triggering a new REID thread, display that we are in re-id mode
                 self._overlay_status(self.STATUS_REID, REID_TEXT_POS)
+                with self.tracking_data.lock:
+                    self.tracking_data.status = self.STATUS_REID
+                    self.tracking_data.control_mode = "Manual"
 
-        # --- Tryb sterowania ---
+        # --- Control mode display ---
         with self.tracking_data.lock:
             mode_text = f"Mode: {self.tracking_data.control_mode}"
             if self.tracking_data.control_mode == "Autonomous":
-                auto_mode_text = ("Targeting" if self.tracking_data.forward_enabled else "Tracking")
+                auto_mode_text = "Targeting" if self.tracking_data.forward_enabled else "Tracking"
             else:
                 auto_mode_text = ""
+
         status_lines = [mode_text]
         if auto_mode_text:
             status_lines.append(auto_mode_text)
+
         self.draw_text(self.frame, status_lines,
                        CONTROL_MODE_TEXT_POS[0],
                        CONTROL_MODE_TEXT_POS[1])
 
-        # Rysuj „focus box” w miejscu kursora
+        # Draw the focus box at the mouse cursor
         self.draw_focused_area(self.frame, self.mouse_x, self.mouse_y, self.roi_size)
 
         return self.frame
@@ -335,7 +382,7 @@ class VideoProcessor:
 
 def read_frames(tello, frame_queue, stop_event):
     """
-    Wątek producenta: odczyt klatek z Tello i wrzucenie do kolejki.
+    Producer thread: reads frames from Tello and puts them into the queue.
     """
     print("[INFO] Frame reader thread started.")
     while not stop_event.is_set():
@@ -348,6 +395,7 @@ def read_frames(tello, frame_queue, stop_event):
         if raw_frame is None:
             continue
 
+        # Convert from RGB to BGR
         raw_frame = cv2.cvtColor(raw_frame, cv2.COLOR_RGB2BGR)
 
         resized = cv2.resize(raw_frame, (RESIZED_WIDTH, RESIZED_HEIGHT))
@@ -362,20 +410,20 @@ def read_frames(tello, frame_queue, stop_event):
 
 def track_frames(frame_queue, tracking_data, stop_event):
     """
-    Wątek konsumenta: przetwarza klatki (BGR), wyświetla i ewentualnie nagrywa.
+    Consumer thread: processes (BGR) frames, shows them in a window, and can record them.
     """
     processor = VideoProcessor(tracking_data)
     print("[INFO] Frame tracker thread started.")
     start_time = time.time()
     frame_count = 0
 
-    # Ustawienia nagrywania
+    # Recording settings
     recording = False
     video_writer = None
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     fps_record = 30
 
-    # Folder do zapisu
+    # Folder for saved recordings
     recordings_folder = "recordings"
     os.makedirs(recordings_folder, exist_ok=True)
 
@@ -386,15 +434,14 @@ def track_frames(frame_queue, tracking_data, stop_event):
             except queue.Empty:
                 continue
 
-            # Przetwarzanie BGR->BGR
+            # Process frame (BGR -> BGR)
             processed = processor.process_frame(frame)
             frame_count += 1
 
-            # FPS do wyświetlenia
             elapsed = time.time() - start_time
             fps_now = frame_count / elapsed if elapsed > 0 else 0.0
 
-            # Napis o FPS
+            # Draw FPS text
             processor.draw_text(
                 processed,
                 [f"FPS: {fps_now:.2f}"],
@@ -402,21 +449,22 @@ def track_frames(frame_queue, tracking_data, stop_event):
                 processed.shape[0] + FPS_TEXT_OFFSET_Y
             )
 
-            # Napis o nagrywaniu
+            # Draw recording status
             rec_text = f"Recording: {'ON' if recording else 'OFF'}"
             processor.draw_text(processed, [rec_text],
                                 RECORDING_TEXT_POS[0],
                                 RECORDING_TEXT_POS[1])
 
-            # Odczyt klawiatury
+            # Keyboard check (only works if this window is in focus)
             key = cv2.waitKey(1) & 0xFF
             if key == 27:  # ESC
                 print("[INFO] ESC pressed, stopping tracker.")
                 break
             elif key == ord('n'):
-                # Przełącz nagrywanie
+                # Toggle recording
                 recording = not recording
                 if recording:
+                    import datetime
                     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                     filename = f"{recordings_folder}/output_{timestamp}.mp4"
                     h, w = processed.shape[:2]
@@ -428,11 +476,10 @@ def track_frames(frame_queue, tracking_data, stop_event):
                         video_writer = None
                     print("[INFO] Recording stopped.")
 
-            # Zapis do pliku jeśli nagrywamy
             if recording and video_writer is not None:
                 video_writer.write(processed)
 
-            # Wyświetlenie w oknie
+            # Show in window
             cv2.imshow("Tracking", processed)
 
     except Exception as e:
