@@ -41,9 +41,9 @@ class DroneController:
         self.last_command = (0, 0, 0, 0)
 
         # PID controllers for yaw & vertical movement
-        self.yaw_pid = PIDController(kp=0.4, ki=0.0, kd=0.0,
+        self.yaw_pid = PIDController(kp=0.2, ki=0.1, kd=0.0,
                                      setpoint=0.0, output_limits=(-100, 100))
-        self.vertical_pid = PIDController(kp=0.4, ki=0.0, kd=0.0,
+        self.vertical_pid = PIDController(kp=0.2, ki=0.1, kd=0.0,
                                           setpoint=0.0, output_limits=(-100, 100))
 
         # PID for forward/back movement (target ROI height is 120 px)
