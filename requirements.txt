@@ -1,6 +1,9 @@
 keyboard
 opencv-python
+opencv-contrib-python
 djitellopy
 numpy
 matplotlib
-opencv-contrib-python
+torch
+timm
+torchvision
