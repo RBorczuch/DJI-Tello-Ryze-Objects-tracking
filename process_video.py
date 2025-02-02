@@ -12,57 +12,44 @@ from tracking_data import TrackingData
 # -----------------------------
 # Global Constants
 # -----------------------------
-# Frame resize dimensions.
-RESIZED_WIDTH = 480
-RESIZED_HEIGHT = 360
+RESIZED_WIDTH = 480      # Width for resizing frames from the Tello camera
+RESIZED_HEIGHT = 360     # Height for resizing frames from the Tello camera
 
-# Default ROI sizes.
-DEFAULT_ROI_SIZE = 50        # Default region-of-interest (ROI) size.
-MIN_ROI_SIZE = 25            # Minimum allowable ROI size.
-DEFAULT_MAX_ROI_SIZE = 200   # Maximum allowable ROI size.
+DEFAULT_ROI_SIZE = 50    # Default region-of-interest (ROI) size
+MIN_ROI_SIZE = 25        # Minimum allowable ROI size
+DEFAULT_MAX_ROI_SIZE = 200  # Maximum allowable ROI size
 
-# Re-identification control.
-REID_INTERVAL = 5            # Attempt re-identification every 5 frames when tracking is lost.
-REID_FAILURE_LIMIT = 240     # After 240 frames of failed re-ID attempts, mark status as Lost.
+REID_INTERVAL = 5        # Attempt re-identification every 5 frames when tracking is lost
+REID_FAILURE_LIMIT = 240 # After 240 frames of failed re-ID attempts, mark status as Lost
 
-# SIFT matching parameters.
-SIFT_UPDATE_SCORE_THRESHOLD = 70    # Only update (record) SIFT template if tracker score exceeds 70.
-SIFT_MATCH_RATIO = 0.75               # Ratio threshold for Lowe's ratio test.
-SIFT_MIN_GOOD_MATCHES = 10            # Minimum number of good matches required for successful re-ID.
+SIFT_UPDATE_SCORE_THRESHOLD = 70  # Only update SIFT template if tracker score > 70
+SIFT_MATCH_RATIO = 0.75           # Ratio threshold for Lowe's ratio test
+SIFT_MIN_GOOD_MATCHES = 10        # Min number of good matches for successful re-ID
 
-# Tracking loss thresholds.
-MIN_TRACK_DURATION = 0.5    # Minimum time (in seconds) before checking tracking score.
-MIN_TRACK_SCORE = 0.30      # If tracking score falls below this value, tracking is considered lost.
+MIN_TRACK_DURATION = 0.5          # Minimum tracking time before checking score
+MIN_TRACK_SCORE = 0.30            # Threshold for considering tracking lost
 
-# Oversized object protection.
-IMG_MARGIN = 10             # Margin from image border; if bbox width/height >= (image dimension - IMG_MARGIN), trigger re-ID.
+IMG_MARGIN = 10                   # Margin from image border to prevent bounding box from filling the frame
 
-# Overlay text styling.
 FONT_SCALE = 0.5
 FONT_THICKNESS = 1
 LINE_SPACING = 20
 
-# Predefined text positions.
 STATUS_TEXT_POS = (10, 20)
 REID_TEXT_POS = (10, 60)
 CONTROL_MODE_TEXT_POS = (10, 140)
 
-# Color definitions (BGR format).
 COLOR_WHITE = (255, 255, 255)
 COLOR_GREEN = (0, 255, 0)
 COLOR_YELLOW = (0, 255, 255)
 COLOR_RED = (0, 0, 255)
 COLOR_BLUE = (255, 0, 0)
 
-# FPS text offset from the bottom of the frame.
-FPS_TEXT_OFFSET_Y = -10  # Negative value to move the text upward.
+FPS_TEXT_OFFSET_Y = -10  # Offset to place FPS text above the bottom edge of the frame
 
-# -----------------------------
-# VitTrack Class: Wrapper for OpenCV TrackerVit.
-# -----------------------------
 class VitTrack:
     """
-    Wraps the OpenCV TrackerVit to initialize tracking with a given ROI and update tracking on subsequent frames.
+    Wraps the OpenCV TrackerVit to initialize and update tracking.
     """
     def __init__(self, model_path, backend_id=0, target_id=0):
         self.model_path = model_path
@@ -79,6 +66,10 @@ class VitTrack:
     def init(self, image, roi):
         """
         Initializes the tracker on the provided frame with the specified ROI.
+
+        Args:
+            image (np.ndarray): Frame image.
+            roi (tuple): (x, y, width, height) bounding box.
         """
         self.model.init(image, roi)
 
@@ -86,41 +77,33 @@ class VitTrack:
         """
         Updates the tracker with a new frame.
 
+        Args:
+            image (np.ndarray): The current frame.
+
         Returns:
-            found (bool): Indicates if the object is found.
-            bbox (tuple): Bounding box of the object.
-            score (float): Confidence score.
+            found (bool): Indicates if the object is found in this frame.
+            bbox (tuple): The updated bounding box.
+            score (float): Confidence score from the tracker.
         """
         found, bbox = self.model.update(image)
         score = self.model.getTrackingScore()
         return found, bbox, score
 
-# -----------------------------
-# VideoProcessor Class: Processes frames for tracking and re-identification.
-# -----------------------------
+
 class VideoProcessor:
     """
-    Processes frames for object tracking and re-identification.
-
-    Key functionalities:
-      - Maintains the active tracker and updates tracking info.
-      - Updates the SIFT template only if the tracker score is high (> SIFT_UPDATE_SCORE_THRESHOLD).
-      - If the tracked object's bounding box nearly fills the frame, disables tracking to force re-identification.
-      - When tracking is lost, attempts SIFT-based re-identification every REID_INTERVAL frames in a separate thread.
-      - If re-identification fails for REID_FAILURE_LIMIT frames, sets status to "Lost".
-      - Overlays unified status and control mode information using helper methods.
-
-    Uses the following status strings:
-        STATUS_TRACKING: "Status: Tracking"
-        STATUS_REID: "Status: Re-identification"
-        STATUS_LOST: "Status: Lost"
+    Processes frames for object tracking and re-identification, updating shared tracking data.
     """
-    # Status string constants.
     STATUS_TRACKING = "Status: Tracking"
     STATUS_REID = "Status: Re-identification"
     STATUS_LOST = "Status: Lost"
 
     def __init__(self, tracking_data, model_path='vittrack.onnx'):
+        """
+        Args:
+            tracking_data (TrackingData): Shared data object for tracking status/coordinates.
+            model_path (str): Path to the ONNX model for TrackerVit.
+        """
         self.tracking_data = tracking_data
         self.model_path = model_path
 
@@ -141,7 +124,7 @@ class VideoProcessor:
         # SIFT template stored as (keypoints, descriptors, bbox)
         self.sift_template = None
 
-        # Re-identification control variables.
+        # Re-identification control
         self.reid_interval = REID_INTERVAL
         self.frame_number = 0
         self.reid_fail_count = 0
@@ -154,11 +137,7 @@ class VideoProcessor:
 
     def _overlay_status(self, text, pos=STATUS_TEXT_POS):
         """
-        Helper method to overlay a status message on the current frame with unified styling.
-        
-        Args:
-            text (str): The status message.
-            pos (tuple): Position to display the text.
+        Helper to overlay a status message on the current frame with consistent styling.
         """
         cv2.putText(self.frame, text, pos, cv2.FONT_HERSHEY_SIMPLEX,
                     FONT_SCALE, COLOR_WHITE, FONT_THICKNESS)
@@ -166,9 +145,9 @@ class VideoProcessor:
     def _on_mouse(self, event, x, y, flags, param):
         """
         Mouse callback for user interactions:
-          - Left click: Initializes tracking with a new ROI and records the initial SIFT template.
-          - Right click: Resets tracking and clears the SIFT template.
-          - Mouse wheel: Adjusts the ROI size.
+          - Left click: Initialize tracking with new ROI and record SIFT template.
+          - Right click: Reset tracking and clear SIFT template.
+          - Mouse wheel: Adjust ROI size.
         """
         self.mouse_x, self.mouse_y = x, y
 
@@ -211,17 +190,7 @@ class VideoProcessor:
     def draw_text(self, img, lines, start_x, start_y, font_scale=FONT_SCALE,
                   color=COLOR_WHITE, thickness=FONT_THICKNESS, line_spacing=LINE_SPACING):
         """
-        Draws multiple lines of text on the provided image.
-        
-        Args:
-            img: Image on which to draw.
-            lines (list of str): List of text lines.
-            start_x (int): Starting x-coordinate.
-            start_y (int): Starting y-coordinate.
-            font_scale (float): Scale of the text.
-            color (tuple): Color of the text.
-            thickness (int): Thickness of the text.
-            line_spacing (int): Vertical spacing between lines.
+        Draws multiple lines of text at the specified position on the image.
         """
         for i, line in enumerate(lines):
             pos = (start_x, start_y + i * line_spacing)
@@ -230,16 +199,8 @@ class VideoProcessor:
 
     def draw_rectangle(self, img, bbox, color=COLOR_GREEN, thickness=1):
         """
-        Draws a rectangle on the image for the given bounding box.
-        
-        Args:
-            img: The image on which to draw.
-            bbox (tuple): Bounding box (x, y, width, height).
-            color (tuple): Rectangle color.
-            thickness (int): Line thickness.
-            
-        Returns:
-            tuple: Center (cx, cy) of the rectangle.
+        Draws a rectangle corresponding to the bounding box on the image.
+        Returns the center (cx, cy) of the rectangle.
         """
         x, y, w, h = map(int, bbox)
         cv2.rectangle(img, (x, y), (x + w, y + h), color, thickness)
@@ -247,15 +208,7 @@ class VideoProcessor:
 
     def draw_focused_area(self, img, x, y, size, color=COLOR_BLUE, thickness=1):
         """
-        Draws a focus box around the given point (typically the mouse position).
-        
-        Args:
-            img: The image on which to draw.
-            x (int): x-coordinate.
-            y (int): y-coordinate.
-            size (int): Size of the focus box.
-            color (tuple): Color of the focus box.
-            thickness (int): Line thickness.
+        Draws a focus box around the specified point (e.g., mouse position).
         """
         half_size = size // 2
         x1 = max(0, x - half_size)
@@ -266,14 +219,7 @@ class VideoProcessor:
 
     def calculate_distance_angle(self, dx, dy):
         """
-        Calculates the Euclidean distance and angle (in degrees) from differences dx and dy.
-        
-        Args:
-            dx (float): Difference in x-coordinates.
-            dy (float): Difference in y-coordinates.
-            
-        Returns:
-            tuple: (distance, angle)
+        Computes Euclidean distance and angle (in degrees) from the given dx, dy.
         """
         dist = math.hypot(dx, dy)
         angle = math.degrees(math.atan2(dy, dx))
@@ -285,9 +231,6 @@ class VideoProcessor:
         """
         Executes SIFT-based re-identification in a separate thread.
         If successful, reinitializes the tracker with the new bounding box.
-        
-        Args:
-            frame: A copy of the current frame used for re-identification.
         """
         sift = cv2.SIFT_create()
         gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -318,22 +261,11 @@ class VideoProcessor:
 
     def process_frame(self, frame):
         """
-        Processes the input frame for tracking and re-identification.
-
-        Workflow:
-          1. Updates the active tracker and overlays tracking info.
-          2. If the tracker is confident (score > SIFT_UPDATE_SCORE_THRESHOLD),
-             updates the SIFT template.
-          3. If the tracked object's bbox nearly fills the frame (with IMG_MARGIN), forces re-ID.
-          4. When tracking is lost, attempts re-identification every REID_INTERVAL frames.
-          5. If re-ID fails for REID_FAILURE_LIMIT frames, sets status to "Lost".
-          6. Overlays unified status and control mode information.
-
-        Args:
-            frame: The current frame.
-            
-        Returns:
-            The processed frame with overlayed tracking and status information.
+        High-level method to process the current frame:
+          1. Update the tracker if tracking is enabled.
+          2. Handle re-identification if tracking is lost.
+          3. Overlay status and control-mode info.
+          4. Update shared tracking data (dx, dy, distance, angle, etc.).
         """
         with self.frame_lock:
             self.frame = frame
@@ -352,12 +284,11 @@ class VideoProcessor:
             found, bbox, score = self.tracker.infer(frame_copy)
             if found:
                 x, y, w, h = map(int, bbox)
-                # If bbox nearly fills the image, trigger re-identification.
+                # If bbox nearly fills the image, force re-identification
                 if w >= img_w - IMG_MARGIN or h >= img_h - IMG_MARGIN:
                     self._overlay_status(self.STATUS_REID, STATUS_TEXT_POS)
                     self.tracking_enabled = False
                     self.tracker = None
-                    # SIFT template remains for re-ID.
                 else:
                     cx, cy = self.draw_rectangle(frame_copy, bbox)
                     cv2.line(frame_copy, (center_x, center_y), (cx, cy), COLOR_YELLOW, 1)
@@ -384,7 +315,7 @@ class VideoProcessor:
                         self.tracking_data.score = score
                         self.tracking_data.roi_height = h
 
-                    # If tracking confidence is too low, disable tracking.
+                    # If confidence too low after MIN_TRACK_DURATION, consider tracking lost
                     if (time.time() - self.tracking_start_time > MIN_TRACK_DURATION) and (score < MIN_TRACK_SCORE):
                         self.tracking_enabled = False
                         self.tracker = None
@@ -402,7 +333,7 @@ class VideoProcessor:
 
             self.frame = frame_copy
 
-            # Update SIFT template if tracking is confident.
+            # Update SIFT template if tracking is confident
             if found and score > SIFT_UPDATE_SCORE_THRESHOLD:
                 x, y, w, h = map(int, bbox)
                 if w > 0 and h > 0:
@@ -431,7 +362,7 @@ class VideoProcessor:
             else:
                 self._overlay_status(self.STATUS_REID, REID_TEXT_POS)
 
-        # --- Overlay control mode information ---
+        # --- Overlay control mode info ---
         with self.tracking_data.lock:
             mode_text = f"Mode: {self.tracking_data.control_mode}"
             if self.tracking_data.control_mode == "Autonomous":
@@ -443,19 +374,15 @@ class VideoProcessor:
             status_lines.append(auto_mode_text)
         self.draw_text(self.frame, status_lines, CONTROL_MODE_TEXT_POS[0], CONTROL_MODE_TEXT_POS[1])
 
-        # Draw the focus box at the current mouse position.
+        # Draw the focus box at the current mouse position
         self.draw_focused_area(self.frame, self.mouse_x, self.mouse_y, self.roi_size)
         return self.frame
 
+
 def read_frames(tello, frame_queue, stop_event):
     """
-    Producer thread: Continuously reads frames from the Tello drone, resizes them,
-    and enqueues them into frame_queue.
-    
-    Args:
-        tello: Tello drone instance.
-        frame_queue (queue.Queue): Queue to store frames.
-        stop_event (threading.Event): Event to signal thread stopping.
+    Producer thread: continuously reads frames from Tello camera,
+    resizes them, and enqueues them for processing.
     """
     print("[INFO] Frame reader thread started.")
     while not stop_event.is_set():
@@ -477,15 +404,11 @@ def read_frames(tello, frame_queue, stop_event):
         frame_queue.put(resized)
     print("[INFO] Frame reader thread exiting.")
 
+
 def track_frames(frame_queue, tracking_data, stop_event):
     """
-    Consumer thread: Retrieves frames from frame_queue, processes each frame for tracking
-    and re-identification, overlays status and control mode information, and displays the frame.
-    
-    Args:
-        frame_queue (queue.Queue): Queue from which frames are retrieved.
-        tracking_data (TrackingData): Shared tracking data.
-        stop_event (threading.Event): Event to signal thread stopping.
+    Consumer thread: retrieves frames from the queue, processes them for
+    tracking/re-identification, and displays the result.
     """
     processor = VideoProcessor(tracking_data)
     print("[INFO] Frame tracker thread started.")

@@ -9,6 +9,10 @@ class TelloManager:
         self.tello = Tello()
 
     def initialize(self):
+        """
+        Connects to the Tello drone, and starts the video stream.
+        Raises an exception on failure.
+        """
         print("[INFO] Initializing Tello drone...")
         try:
             self.tello.connect()
@@ -19,6 +23,9 @@ class TelloManager:
             raise
 
     def cleanup(self):
+        """
+        Attempts to land the drone and stop the video stream, then ends the Tello session.
+        """
         print("[INFO] Cleaning up...")
         try:
             self.tello.land()

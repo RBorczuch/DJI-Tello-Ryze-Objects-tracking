@@ -8,11 +8,21 @@ import numpy as np
 from tracking_data import TrackingData
 
 class StatusDisplay:
+    """
+    Graphical user interface using Tkinter and Matplotlib to show drone status
+    and real-time plots (2D + a 3D odometry chart).
+    """
     def __init__(self, tello, tracking_data):
+        """
+        Args:
+            tello: Tello drone instance.
+            tracking_data (TrackingData): Shared data object for tracking/drone info.
+        """
         self.tello = tello
         self.tracking_data = tracking_data
         self.state_data_lock = Lock()
         self.state_data = {}
+
         self.root = tk.Tk()
         self.root.title("Drone Status")
         self.root.geometry("2000x900")
@@ -32,6 +42,9 @@ class StatusDisplay:
         self.position_data = {"x": [0], "y": [0], "z": [0]}
 
     def _initialize_left_panel(self):
+        """
+        Creates the left Tkinter frame for textual data display.
+        """
         left_frame = tk.Frame(self.root)
         left_frame.grid(row=0, column=0, sticky="nsew")
 
@@ -50,6 +63,9 @@ class StatusDisplay:
         return left_frame
 
     def _initialize_right_panel(self):
+        """
+        Creates the right Tkinter frame for 2D plots.
+        """
         right_frame = tk.Frame(self.root)
         right_frame.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
 
@@ -67,6 +83,9 @@ class StatusDisplay:
         return right_frame
 
     def _initialize_3d_panel(self):
+        """
+        Creates the 3D panel (odometry chart) showing the drone's trajectory.
+        """
         right_3d_frame = tk.Frame(self.root)
         right_3d_frame.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
 
@@ -81,9 +100,8 @@ class StatusDisplay:
         self.ax_3d.set_ylabel("Y (cm)")
         self.ax_3d.set_zlabel("Z (cm)")
 
-        # IMPORTANT: This inverts the Z-axis so that Tello's "positive = down"
-        # is displayed visually as "positive = up" on the chart.
-        self.ax_3d.invert_zaxis()  # <-- ADDED BACK
+        # Invert Z-axis so Tello’s positive down is shown as positive up in the chart
+        self.ax_3d.invert_zaxis()
 
         self.canvas_3d = FigureCanvasTkAgg(self.fig_3d, master=right_3d_frame)
         self.canvas_3d.get_tk_widget().grid(row=0, column=0, sticky="nsew")
@@ -91,6 +109,9 @@ class StatusDisplay:
         return right_3d_frame
 
     def _define_sections_and_units(self):
+        """
+        Defines grouping of states (sections) and units for display, organizes label references.
+        """
         sections = {
             "Battery": ["bat"],
             "Temperature": ["templ", "temph"],
@@ -138,6 +159,9 @@ class StatusDisplay:
         return sections, units, state_labels
 
     def _initialize_buffers(self):
+        """
+        Prepares data buffers for plotting time-series data.
+        """
         return {
             "local_time": [],
             "vgx": [], "vgy": [], "vgz": [],
@@ -147,6 +171,10 @@ class StatusDisplay:
         }
 
     def update_wifi(self):
+        """
+        Periodically queries the drone’s WiFi signal and updates state data.
+        Runs on a background thread.
+        """
         while True:
             try:
                 wifi_value = self.tello.query_wifi_signal_noise_ratio()
@@ -157,6 +185,11 @@ class StatusDisplay:
             time.sleep(60)
 
     def update_state(self):
+        """
+        Periodically reads the drone’s current state,
+        merges it with tracking data, and buffers for plotting.
+        Runs on a background thread.
+        """
         while True:
             try:
                 state = self.tello.get_current_state()
@@ -180,6 +213,10 @@ class StatusDisplay:
             time.sleep(0.1)
 
     def _compensate_gravity(self, state):
+        """
+        Adjusts raw accelerometer readings by subtracting gravity as per
+        pitch/roll/yaw orientation, so displayed acc is net of gravitational force.
+        """
         pitch = state.get("pitch", 0)
         roll = state.get("roll", 0)
         yaw = state.get("yaw", 0)
@@ -207,7 +244,7 @@ class StatusDisplay:
         ])
         R_yaw = np.array([
             [np.cos(yaw_rad), -np.sin(yaw_rad), 0],
-            [np.sin(yaw_rad), np.cos(yaw_rad), 0],
+            [np.sin(yaw_rad),  np.cos(yaw_rad), 0],
             [0, 0, 1],
         ])
 
@@ -225,6 +262,10 @@ class StatusDisplay:
         state["agz"] = adjusted_agz
 
     def update_labels(self):
+        """
+        Updates the GUI text labels from the latest state data
+        (runs periodically via Tkinter’s after() callback).
+        """
         with self.state_data_lock:
             state_copy = self.state_data.copy()
 
@@ -238,16 +279,10 @@ class StatusDisplay:
 
         self.root.after(100, self.update_labels)
 
-    def _initialize_buffers(self):
-        return {
-            "local_time": [],
-            "vgx": [], "vgy": [], "vgz": [],
-            "pitch": [], "roll": [], "yaw": [], "h": [],
-            "agx": [], "agy": [], "agz": [],
-            "dx": [], "dy": [], "distance": [], "angle": [],
-        }
-
     def _buffer_data(self, state):
+        """
+        Adds the current data point (from drone state + tracking) to the rolling buffers.
+        """
         current_time = time.time() - self.start_time
         self.buffer["local_time"].append(current_time)
 
@@ -260,8 +295,13 @@ class StatusDisplay:
             self.buffer[key].append(state.get(key, 0))
 
     def _update_position(self, state):
+        """
+        Updates the approximate 3D position (x, y, z) based on velocity and orientation.
+        This is a simplistic approach for demonstration, not a true SLAM/odometry.
+        """
         required_keys = ["vgx", "vgy", "vgz", "pitch", "roll", "yaw"]
         if all(k in state for k in required_keys):
+            # body velocities in cm/s -> convert to m/s
             v_body = np.array([state["vgx"], state["vgy"], state["vgz"]]) * 0.01
             roll_rad = np.radians(state["roll"])
             pitch_rad = np.radians(state["pitch"])
@@ -279,13 +319,13 @@ class StatusDisplay:
             ])
             R_yaw = np.array([
                 [np.cos(yaw_rad), -np.sin(yaw_rad), 0],
-                [np.sin(yaw_rad), np.cos(yaw_rad), 0],
+                [np.sin(yaw_rad),  np.cos(yaw_rad), 0],
                 [0, 0, 1],
             ])
 
             R = R_yaw @ R_pitch @ R_roll
             v_world = R @ v_body
-            dt = 0.05
+            dt = 0.05  # assumed loop rate in seconds
 
             x_new = self.position_data["x"][-1] + v_world[0] * dt * 100
             y_new = self.position_data["y"][-1] + v_world[1] * dt * 100
@@ -296,13 +336,21 @@ class StatusDisplay:
             self.position_data["z"].append(z_new)
 
     def update_plots(self, _):
+        """
+        Matplotlib animation callback to refresh plots (2D) and the 3D trajectory.
+        """
         self._update_2d_plots()
         self._update_3d_plot()
 
     def _update_2d_plots(self):
+        """
+        Updates the six subplots (velocity, orientation, height, acceleration,
+        object distance, and angle) with the latest data.
+        """
         if not self.buffer["local_time"]:
             return
 
+        # Move buffered data into plot_data
         self.plot_data["local_time"].extend(self.buffer["local_time"])
         data_keys = [
             "vgx", "vgy", "vgz", "pitch", "roll", "yaw", "h",
@@ -311,9 +359,11 @@ class StatusDisplay:
         for key in data_keys:
             self.plot_data[key].extend(self.buffer[key])
 
+        # Clear the buffer
         for key in self.buffer:
             self.buffer[key] = []
 
+        # Trim to 10s window
         latest_time = self.plot_data["local_time"][-1]
         time_window = latest_time - 10
         indices = [i for i, t in enumerate(self.plot_data["local_time"]) if t >= time_window]
@@ -369,9 +419,13 @@ class StatusDisplay:
         self.canvas.draw()
 
     def _update_3d_plot(self):
+        """
+        Redraws the drone’s 3D trajectory in the odometry chart,
+        leaving only ‘Trajectory’ in the legend.
+        """
         self.ax_3d.clear()
 
-        # Plot the path
+        # Plot the path as 'Trajectory'
         self.ax_3d.plot(
             self.position_data["x"],
             self.position_data["y"],
@@ -379,18 +433,15 @@ class StatusDisplay:
             label="Trajectory"
         )
 
-        x, y, z = (
-            self.position_data["x"][-1],
-            self.position_data["y"][-1],
-            self.position_data["z"][-1]
-        )
-
+        # Plot orientation axes WITHOUT label, so only 'Trajectory' remains in legend
         if len(self.plot_data["pitch"]) > 0 and len(self.plot_data["roll"]) > 0 and len(self.plot_data["yaw"]) > 0:
-            pitch, roll, yaw = (
-                np.radians(self.plot_data["pitch"][-1]),
-                np.radians(self.plot_data["roll"][-1]),
-                np.radians(self.plot_data["yaw"][-1]),
-            )
+            x = self.position_data["x"][-1]
+            y = self.position_data["y"][-1]
+            z = self.position_data["z"][-1]
+            pitch = np.radians(self.plot_data["pitch"][-1])
+            roll = np.radians(self.plot_data["roll"][-1])
+            yaw = np.radians(self.plot_data["yaw"][-1])
+
             R = self._get_rotation_matrix(roll, pitch, yaw)
             body_x = np.array([1, 0, 0])
             body_y = np.array([0, 1, 0])
@@ -401,26 +452,29 @@ class StatusDisplay:
 
             self.ax_3d.quiver(
                 x, y, z, world_x[0], world_x[1], world_x[2],
-                color="r", length=1, normalize=True, label="X-Axis"
+                color="r", length=1, normalize=True  # no label
             )
             self.ax_3d.quiver(
                 x, y, z, world_y[0], world_y[1], world_y[2],
-                color="g", length=1, normalize=True, label="Y-Axis"
+                color="g", length=1, normalize=True  # no label
             )
             self.ax_3d.quiver(
                 x, y, z, world_z[0], world_z[1], world_z[2],
-                color="b", length=1, normalize=True, label="Z-Axis"
+                color="b", length=1, normalize=True  # no label
             )
 
         self.ax_3d.set_title("Odometry (X=Forward, Y=Left, Z=Down)")
         self.ax_3d.set_xlabel("X (cm)")
         self.ax_3d.set_ylabel("Y (cm)")
         self.ax_3d.set_zlabel("Z (cm)")
-        self.ax_3d.invert_zaxis()  # Key: Ensures "drone up" is "chart up" if Tello's vgz is reversed
-        self.ax_3d.legend()
+        self.ax_3d.invert_zaxis()
+        self.ax_3d.legend()  # Only "Trajectory" will appear now
         self.canvas_3d.draw()
 
     def _get_rotation_matrix(self, roll, pitch, yaw):
+        """
+        Returns a rotation matrix from roll, pitch, yaw angles.
+        """
         R_roll = np.array([
             [1, 0, 0],
             [0, np.cos(roll), -np.sin(roll)],
@@ -433,18 +487,21 @@ class StatusDisplay:
         ])
         R_yaw = np.array([
             [np.cos(yaw), -np.sin(yaw), 0],
-            [np.sin(yaw), np.cos(yaw), 0],
+            [np.sin(yaw),  np.cos(yaw), 0],
             [0, 0, 1],
         ])
         return R_yaw @ R_pitch @ R_roll
 
     def run(self):
+        """
+        Launches background threads for state reading + WiFi reading,
+        starts updating the GUI labels, and runs Matplotlib animation.
+        """
         self.start_time = time.time()
         Thread(target=self.update_state, daemon=True).start()
         Thread(target=self.update_wifi, daemon=True).start()
         self.update_labels()
 
-        # Keep a reference to avoid garbage collection
         self.ani = animation.FuncAnimation(
             self.fig, self.update_plots, interval=200, cache_frame_data=False
         )
