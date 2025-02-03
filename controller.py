@@ -12,14 +12,14 @@ DEAD_ZONE = 5            # Minimum error to respond to
 
 # PID configuration
 PID_CONFIG = {
-    'yaw': {'kp': 0.1, 'ki': 0.01, 'kd': 0.0},
+    'yaw': {'kp': 0.2, 'ki': 0.01, 'kd': 0.0},
     'vertical': {'kp': 0.2, 'ki': 0.01, 'kd': 0.0},
     'forward': {'kp': 0.4, 'ki': 0.0, 'kd': 0.0, 'setpoint': 120}
 }
 
 # Velocity configuration
 VELOCITY_CONFIG = {
-    'initial': 20,
+    'initial': 30,
     'min': 10,
     'max': 100,
     'step': 5

@@ -284,7 +284,7 @@ class VideoProcessor:
                         f"dx: {dx}px",
                         f"dy: {dy}px",
                         f"Distance: {dist:.2f}px",
-                        f"Angle: {angle:.2f}°",
+                        f"Angle: {angle:.2f}st",
                     ]
                     self.draw_text(frame_copy, info, STATUS_TEXT_POS[0], STATUS_TEXT_POS[1])
 
